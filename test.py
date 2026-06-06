@@ -7,5 +7,5 @@ from torch.utils.data import Dataset, DataLoader
 from train import model,vocab
 model.load_state_dict(torch.load("model_weight.pth"))
 
-
+dhd
 
