@@ -1,110 +1,96 @@
 import nltk
 import torch
 import torch.nn as nn
-from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from torch.utils.data import Dataset, DataLoader
 
-nltk.download('punkt_tab')
-lines=open("/Users/srikrishnaadithyakatragadda/Downloads/commentry_lines.rtf",encoding="utf-8").readlines()
-lines=lines[9:]
-total_lines=""
+nltk.download('punkt_tab', quiet=True)
+
+lines = open("/Users/srikrishnaadithyakatragadda/Downloads/commentry_lines.rtf", encoding="utf-8").readlines()
+lines = lines[9:]
+total_lines = ""
 for i in range(len(lines)):
-    line=lines[i]
-    lines[i]=line[0:len(line)-3].lower()
-    print(lines[i])
-    total_lines=total_lines+lines[i]+" "
+    line = lines[i]
+    lines[i] = line[0:len(line) - 3].lower()
+    total_lines = total_lines + lines[i] + " "
 
-#Creating word to index mapping
-tokenized=word_tokenize(total_lines) #All the lines are seperated into tokens
-tokenized=set(tokenized)#Contains all the unique tokens needed for vocabulary
-vocab={'<unk>':0}
+tokenized = sorted(list(set(word_tokenize(total_lines))))
+vocab = {'<PAD>': 0}
 for word in tokenized:
-    vocab[word]=len(vocab)
+    if word not in vocab:
+        vocab[word] = len(vocab)
 
+#2. MODEL DEFINITION
 
-
-#Preprocessing the data to get into required form
-#Converting it so that we have a required supervised learning with an input and output
-input=[]
-output=[]
-
-for line in lines:
-    arr=word_tokenize(line.lower())
-    inp=[]
-    for i in range(len(arr)-1):
-        out=[]
-        inp.append(vocab[arr[i]])
-        out.append(vocab[arr[i+1]])
-        input.append(inp.copy())
-        output.append(out.copy())
-        out=[]
-
-print(input)
-print(len(output))
-
-#Creating dataset and dataloader to fetch data from input and output
-
-class dataset(Dataset):
-    def __init__(self,input,output,vocab):
-        self.input=input
-        self.output=output
-        self.vocab=vocab
-    def __len__(self):
-        return len(self.input)
-    def __getitem__(self,index):
-        x=self.input[index]
-        y=self.output[index]
-        #Padding at the end
-        x=[0]*(64-len(x))+x
-        return torch.tensor(x),torch.tensor(y)
-
-train_dataloader=DataLoader(dataset(input,output,vocab),batch_size=64,shuffle=True)
-test_dataloader=DataLoader(dataset(input,output,vocab),batch_size=64,shuffle=True)
-
-class model(nn.Module):
-    def __init__(self):
+class NextWordLSTM(nn.Module):
+    def __init__(self, vocab_size):
         super().__init__()
-        self.embedding=nn.Embedding(len(vocab),50)
-        self.lstm=nn.LSTM(50,150,batch_first=True)
-        self.linear=nn.Linear(150,len(vocab))
-    def forward(self,x):
-        x=self.embedding(x)
-        _,(hidden,_)=self.lstm(x)
-        res=self.linear(hidden[0])
+        self.embedding = nn.Embedding(vocab_size, 50, padding_idx=0)
+        self.lstm = nn.LSTM(50, 150, batch_first=True)
+        self.linear = nn.Linear(150, vocab_size)
+
+    def forward(self, x, seq_lengths):
+        x = self.embedding(x)
+        out, _ = self.lstm(x)
+        # Pluck the exact output vector for the LAST REAL WORD
+        batch_size = x.size(0)
+        last_word_indices = seq_lengths - 1
+        last_outputs = out[torch.arange(batch_size), last_word_indices]
+        res = self.linear(last_outputs)
         return res
 
-model=model()
-criterion=nn.CrossEntropyLoss()
-optimizer=torch.optim.Adam(model.parameters(),lr=0.001)
 
+# 3. TRAINING LOOP
 if __name__ == "__main__":
-    for epoch in range(150):
-        total_loss=0
-        for x,y in train_dataloader:
 
-            a=model(x)
-            y=y.squeeze()
-            loss=criterion(a,y)
-            total_loss=total_loss+loss.item()
+    input_seqs = []
+    output_labels = []
+
+    for line in lines:
+        arr = word_tokenize(line.lower())
+        for i in range(1, len(arr)):
+            inp = [vocab[w] for w in arr[:i]]
+            out = vocab[arr[i]]
+            input_seqs.append(inp)
+            output_labels.append(out)
+
+    MAX_LEN = 20
+
+    class CricketDataset(Dataset):
+        def __init__(self, inputs, outputs):
+            self.inputs = inputs
+            self.outputs = outputs
+
+        def __len__(self):
+            return len(self.inputs)
+
+        def __getitem__(self, index):
+            x = self.inputs[index]
+            y = self.outputs[index]
+            seq_length=len(x)
+            x_padded = x + [0] * (MAX_LEN - len(x))
+            return torch.tensor(x_padded), torch.tensor(y), seq_length
+
+
+    train_dataloader = DataLoader(CricketDataset(input_seqs, output_labels), batch_size=16, shuffle=True)
+
+    model = NextWordLSTM(len(vocab))
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
+
+    print("Starting training...")
+    for epoch in range(50):
+        total_loss = 0
+        for x_padded, y, seq_lengths in train_dataloader:
             optimizer.zero_grad()
-            loss.backward()#We do for the present ones optimizer.zero_grad
+            predictions = model(x_padded, seq_lengths)
+            loss = criterion(predictions, y)
+            loss.backward()
             optimizer.step()
-        print(f"Epoch {epoch} loss: {total_loss}")
-        torch.save(model.state_dict(),"model_weight.pth")
+            total_loss += loss.item()
 
+        if epoch % 10 == 0:
+            print(f"Epoch {epoch} loss: {total_loss:.4f}")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    torch.save(model.state_dict(), "model_weight.pth")
+    print("Training complete and model saved!")
