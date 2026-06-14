@@ -30,4 +30,4 @@ for _ in range(10):
     generated_words.append(next_word)
 
 print("\nFinal Output:", " ".join(generated_words))
-print("Testing done!!! ")
+print("Testing done totally!!! ")
